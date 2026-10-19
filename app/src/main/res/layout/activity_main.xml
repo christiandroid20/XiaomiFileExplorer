@@ -38,7 +38,7 @@
         android:layout_height="72dp"
         android:paddingLeft="16dp"
         android:paddingRight="16dp"
-        android:fillViewPort="true"
+        android:fillViewport="true"
         android:scrollbars="none">
 
         <LinearLayout
