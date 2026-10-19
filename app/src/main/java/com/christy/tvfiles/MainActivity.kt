@@ -40,6 +40,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var countLabel: TextView
     private var currentPath = File("/storage/emulated/0")
     private var currentFilter = FileType.ALL
+    private var showingStorageScreen = true
     private var currentDocumentDir: DocumentFile? = null
     private var savedExternalRoot: DocumentFile? = null
     private val savedExternalRoots = mutableListOf<DocumentFile>()
@@ -75,8 +76,8 @@ class MainActivity : AppCompatActivity() {
 
         restoreExternalTree()
         createNavigationButtons()
-        // Present the storage chooser on launch; don't silently open internal storage.
-        recyclerView.post { showStorageChoices() }
+        // Show the app's own storage dashboard, like a generic TV box file manager.
+        recyclerView.post { showStorageScreen() }
     }
 
     /**
@@ -131,7 +132,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager() && currentDocumentDir == null) {
+        if (!showingStorageScreen && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            Environment.isExternalStorageManager() && currentDocumentDir == null) {
             loadDirectory(currentPath, currentFilter)
         }
     }
@@ -159,51 +161,130 @@ class MainActivity : AppCompatActivity() {
         savedExternalRoot = savedExternalRoots.lastOrNull()
     }
 
-    private fun showStorageChoices() {
-        val choices = mutableListOf<String>()
-        val actions = mutableListOf<() -> Unit>()
+    private data class StorageEntry(
+        val name: String,
+        val subtitle: String,
+        val path: File? = null,
+        val document: DocumentFile? = null,
+        val internal: Boolean = false,
+        val needsPicker: Boolean = false
+    )
 
-        // Internal storage
-        choices.add("Memoria interna")
-        actions.add { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+    /**
+     * Render storage choices inside the app instead of opening an Android AlertDialog.
+     * Mounted USB/SD volumes are detected from StorageManager and /storage.
+     */
+    private fun showStorageScreen() {
+        showingStorageScreen = true
+        pathLabel.text = "Almacenamientos"
+        val entries = detectStorageEntries()
+        countLabel.text = if (entries.size <= 1) "Memoria interna" else "${entries.size} unidades disponibles"
+        recyclerView.adapter = StorageAdapter(entries)
+        recyclerView.scrollToPosition(0)
+    }
 
-        // Detect storage volumes (microSD, USB-OTG, NVMe, etc.) using StorageManager
+    private fun detectStorageEntries(): List<StorageEntry> {
+        val entries = mutableListOf<StorageEntry>()
+        val seenPaths = mutableSetOf<String>()
+        val seenUris = mutableSetOf<String>()
+        val internal = File("/storage/emulated/0")
+        entries.add(StorageEntry("Memoria interna", "Almacenamiento del dispositivo", internal, internal = true))
+        try { seenPaths.add(internal.canonicalPath) } catch (_: Exception) { seenPaths.add(internal.absolutePath) }
+
+        fun addPath(name: String, subtitle: String, path: File) {
+            if (!path.exists() || !path.isDirectory) return
+            val key = try { path.canonicalPath } catch (_: Exception) { path.absolutePath }
+            if (!seenPaths.add(key)) return
+            entries.add(StorageEntry(name, subtitle, path = path))
+        }
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            val sm = getSystemService(Context.STORAGE_SERVICE) as StorageManager
-            val volumes = try { sm.storageVolumes } catch (_: Exception) { emptyList<StorageVolume>() }
-            volumes?.forEach { vol ->
+            val manager = getSystemService(Context.STORAGE_SERVICE) as StorageManager
+            val volumes = try { manager.storageVolumes } catch (_: Exception) { emptyList<StorageVolume>() }
+            for (volume in volumes) {
                 try {
-                    // Skip the primary internal volume because we already added it
-                    val isPrimary = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        // StorageVolume doesn't expose isPrimary() in older APIs; approximate by isEmulated
-                        vol.isEmulated
-                    } else true
-                    if (isPrimary) return@forEach
+                    if (volume.isEmulated || !volume.isRemovable) continue
+                    val path = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        volume.directory
+                    } else {
+                        volume.uuid?.let { File("/storage/$it") }
+                    }
+                    val label = try {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) volume.getDescription(this)
+                        else path?.name ?: "Unidad externa"
+                    } catch (_: Exception) { path?.name ?: "Unidad externa" }
 
-                    val label = try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) vol.getDescription(this) else "Unidad externa" } catch (_: Exception) { "Unidad externa" }
-
-                    choices.add(label)
-                    // Ask the user to pick the removable volume through the standard SAF UI.
-                    // StorageVolume.createAccessIntent() is inconsistent on Android TV firmware.
-                    actions.add { treePicker.launch(null) }
-                } catch (_: Exception) { }
+                    if (path != null && path.exists() && path.isDirectory) {
+                        addPath(label, "USB / microSD • ${path.absolutePath}", path)
+                    } else {
+                        val saved = savedExternalRoots.firstOrNull { it.uri.toString() !in seenUris }
+                        if (saved != null) {
+                            seenUris.add(saved.uri.toString())
+                            entries.add(StorageEntry(saved.name ?: label, "Almacenamiento externo autorizado", document = saved))
+                        } else {
+                            entries.add(StorageEntry(label, "Conceder acceso a la unidad", path = path, needsPicker = true))
+                        }
+                    }
+                } catch (ex: Exception) {
+                    Log.d("MainActivity", "No se pudo detectar una unidad extraíble", ex)
+                }
             }
         }
 
-        // Option to add a storage via generic picker
-        choices.add("Añadir microSD / USB-C…")
-        actions.add { treePicker.launch(null) }
-
-        // Previously saved external roots
-        savedExternalRoots.forEach { root ->
-            choices.add("Abrir: " + (root.name ?: "Unidad externa"))
-            actions.add { savedExternalRoot = root; loadDocumentDirectory(root, currentFilter) }
+        // Some TV box firmware exposes mounted drives under /storage but omits them from
+        // StorageManager, so scan that directory as a fallback.
+        try {
+            File("/storage").listFiles()?.forEach { candidate ->
+                if (candidate.name.equals("emulated", true) || candidate.name.equals("self", true)) return@forEach
+                if (candidate.isDirectory) {
+                    addPath(candidate.name, "USB / microSD • ${candidate.absolutePath}", candidate)
+                }
+            }
+        } catch (ex: Exception) {
+            Log.d("MainActivity", "No se pudo explorar /storage", ex)
         }
 
-        android.app.AlertDialog.Builder(this).setTitle("Seleccionar almacenamiento")
-            .setItems(choices.toTypedArray()) { _, which ->
-                actions.getOrNull(which)?.invoke()
-            }.setNegativeButton("Cancelar", null).show()
+        // Keep previously authorized SAF roots visible even when firmware hides their paths.
+        for (root in savedExternalRoots) {
+            val uriKey = root.uri.toString()
+            if (seenUris.add(uriKey)) {
+                entries.add(StorageEntry(root.name ?: "Unidad externa", "Almacenamiento externo autorizado", document = root))
+            }
+        }
+        return entries
+    }
+
+    private inner class StorageAdapter(private val entries: List<StorageEntry>) : RecyclerView.Adapter<FileHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): FileHolder =
+            FileHolder(layoutInflater.inflate(R.layout.item_card, parent, false))
+
+        override fun getItemCount() = entries.size
+
+        override fun onBindViewHolder(holder: FileHolder, position: Int) {
+            val entry = entries[position]
+            holder.name.text = entry.name
+            holder.sub.text = entry.subtitle
+            holder.icon.setImageResource(R.drawable.ic_folder)
+            holder.itemView.contentDescription = "${entry.name}, ${entry.subtitle}"
+            holder.itemView.setOnClickListener {
+                when {
+                    entry.document != null -> {
+                        savedExternalRoot = entry.document
+                        loadDocumentDirectory(entry.document, currentFilter)
+                    }
+                    entry.needsPicker -> {
+                        // SAF is only a permission fallback for drives that Android does not expose by path.
+                        treePicker.launch(null)
+                    }
+                    entry.path != null -> {
+                        currentPath = entry.path
+                        currentDocumentDir = null
+                        showingStorageScreen = false
+                        checkStorageAccess()
+                    }
+                }
+            }
+        }
     }
 
     private fun handleTreeUri(uri: Uri) {
@@ -256,6 +337,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDocumentDirectory(dir: DocumentFile, filter: FileType) {
+        showingStorageScreen = false
         currentDocumentDir = dir
         pathLabel.text = dir.name ?: "Almacenamiento externo"
         countLabel.text = dir.uri.toString()
@@ -353,6 +435,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindDocumentIcon(name: String, isDirectory: Boolean, imageView: ImageView, document: DocumentFile? = null) {
+        imageView.tag = null
         imageView.setImageDrawable(null)
         if (isDirectory) { imageView.setImageResource(R.drawable.ic_folder); return }
         val extension = name.substringAfterLast('.', "").lowercase()
@@ -361,6 +444,22 @@ class MainActivity : AppCompatActivity() {
             if (uri != null && extension in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) {
                 val bitmap = decodeDocumentImage(uri, imageView)
                 if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            }
+            if (uri != null && extension == "apk") {
+                imageView.setImageResource(R.drawable.ic_apk)
+                loadApkIconAsync("document:${uri}", imageView) {
+                    val iconDir = File(cacheDir, "apk-icons").apply { mkdirs() }
+                    val cachedApk = File(iconDir, "${uri.toString().hashCode()}.apk")
+                    val expectedLength = document?.length() ?: -1L
+                    if (!cachedApk.exists() || cachedApk.length() == 0L ||
+                        (expectedLength > 0 && cachedApk.length() != expectedLength)) {
+                        contentResolver.openInputStream(uri)?.use { input ->
+                            cachedApk.outputStream().use { output -> input.copyTo(output) }
+                        } ?: return@loadApkIconAsync null
+                    }
+                    getApkIcon(cachedApk.absolutePath)
+                }
+                return
             }
             if (uri != null && extension in setOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v")) {
                 val retriever = android.media.MediaMetadataRetriever()
@@ -403,7 +502,7 @@ class MainActivity : AppCompatActivity() {
                 isAllCaps = false
                 setOnClickListener {
                     currentFilter = type
-                    reloadCurrentDirectory()
+                    if (!showingStorageScreen) reloadCurrentDirectory()
                 }
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     marginStart = 3
@@ -418,7 +517,7 @@ class MainActivity : AppCompatActivity() {
             isAllCaps = false
             setOnClickListener {
                 currentFilter = FileType.ALL
-                showStorageChoices()
+                showStorageScreen()
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
@@ -431,6 +530,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun loadDirectory(dir: File, filter: FileType) {
+        showingStorageScreen = false
         currentDocumentDir = null
         currentPath = dir
         pathLabel.text = dir.name.ifBlank { dir.absolutePath }
@@ -500,6 +600,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindFileIcon(file: File, imageView: ImageView) {
+        imageView.tag = null
         imageView.setImageDrawable(null)
         if (file.isDirectory) {
             imageView.setImageResource(R.drawable.ic_folder)
@@ -523,9 +624,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
         if (extension == "apk") {
-            val icon = getApkIcon(file.absolutePath)
-            if (icon != null) imageView.setImageDrawable(icon)
-            else imageView.setImageResource(R.drawable.ic_apk)
+            imageView.setImageResource(R.drawable.ic_apk)
+            loadApkIconAsync("file:${file.absolutePath}", imageView) { getApkIcon(file.absolutePath) }
             return
         }
         imageView.setImageResource(when (extension) {
@@ -537,6 +637,19 @@ class MainActivity : AppCompatActivity() {
             "zip", "rar", "7z", "tar", "gz" -> R.drawable.ic_archive
             else -> R.drawable.ic_file
         })
+    }
+
+    private fun loadApkIconAsync(key: String, imageView: ImageView, loader: () -> Drawable?) {
+        imageView.tag = key
+        Thread {
+            val icon = try { loader() } catch (ex: Exception) {
+                Log.d("MainActivity", "No se pudo leer el icono APK", ex)
+                null
+            }
+            runOnUiThread {
+                if (imageView.tag == key && icon != null) imageView.setImageDrawable(icon)
+            }
+        }.start()
     }
 
     private fun getApkIcon(path: String): Drawable? = try {
@@ -586,20 +699,25 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Android API, retained for older TV devices")
     override fun onBackPressed() {
+        if (showingStorageScreen) {
+            super.onBackPressed()
+            return
+        }
         val external = currentDocumentDir
         if (external != null) {
             val parent = external.parentFile
-            if (parent != null) loadDocumentDirectory(parent, currentFilter)
-            else { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+            if (parent != null && parent.uri != external.uri) loadDocumentDirectory(parent, currentFilter)
+            else showStorageScreen()
             return
         }
+        val rootPath = currentPath.absolutePath == "/storage/emulated/0"
         val parent = currentPath.parentFile
-        if (parent != null && currentPath.absolutePath != "/storage/emulated/0") {
+        if (!rootPath && parent != null) {
             loadDirectory(parent, currentFilter)
-        } else if (currentPath.absolutePath != "/storage/emulated/0") {
-            loadDirectory(File("/storage/emulated/0"), currentFilter)
+        } else if (!rootPath) {
+            showStorageScreen()
         } else {
-            super.onBackPressed()
+            showStorageScreen()
         }
     }
 
@@ -610,6 +728,7 @@ class MainActivity : AppCompatActivity() {
                 loadDirectory(currentPath, currentFilter)
             } else {
                 Toast.makeText(this, "Sin permiso de almacenamiento no se pueden listar los archivos", Toast.LENGTH_LONG).show()
+                showStorageScreen()
             }
         }
     }
