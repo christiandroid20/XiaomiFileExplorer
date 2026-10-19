@@ -1,0 +1,5 @@
+<resources>
+    <style name="Theme.AppCompat.NoActionBar" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Personalizaciones de color si lo deseas -->
+    </style>
+</resources>
