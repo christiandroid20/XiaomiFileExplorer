@@ -1,15 +1,21 @@
 package com.christy.tvfiles
 
 import android.Manifest
-import android.content.Intent
+import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -17,11 +23,11 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.documentfile.provider.DocumentFile
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.documentfile.provider.DocumentFile
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import java.io.File
@@ -37,21 +43,19 @@ class MainActivity : AppCompatActivity() {
     private val savedExternalRoots = mutableListOf<DocumentFile>()
 
     private val treePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri?.let { handleTreeUri(it) }
+    }
+
+    // Used when we launch a StorageVolume.createAccessIntent(...) which is an arbitrary intent
+    private val volumePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        val uri = data?.data
         if (uri != null) {
-            try {
-                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                contentResolver.takePersistableUriPermission(uri, flags)
-                val root = DocumentFile.fromTreeUri(this, uri)
-                if (root != null) {
-                    savedExternalRoot = root
-                    if (savedExternalRoots.none { it.uri == root.uri }) savedExternalRoots.add(root)
-                    val savedUris = savedExternalRoots.map { it.uri.toString() }.toSet()
-                    getSharedPreferences("storage_access", MODE_PRIVATE).edit().putStringSet("external_tree_uris", savedUris).apply()
-                    loadDocumentDirectory(root, currentFilter)
-                }
-            } catch (_: Exception) {
-                Toast.makeText(this, "Android no permitió conservar el acceso a esa unidad", Toast.LENGTH_LONG).show()
-            }
+            handleTreeUri(uri)
+        } else {
+            // Some devices return the uri inside extras or have no data; fall back to OpenDocumentTree
+            // Nothing to do here - user can try again.
+            Log.w("MainActivity", "volumePicker returned no uri")
         }
     }
 
@@ -153,19 +157,112 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showStorageChoices() {
-        val choices = mutableListOf("Memoria interna", "Añadir microSD / USB-C…")
-        savedExternalRoots.forEach { root -> choices.add("Abrir: " + (root.name ?: "Unidad externa")) }
+        val choices = mutableListOf<String>()
+        val actions = mutableListOf<() -> Unit>()
+
+        // Internal storage
+        choices.add("Memoria interna")
+        actions.add { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+
+        // Detect storage volumes (microSD, USB-OTG, NVMe, etc.) using StorageManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val sm = getSystemService(Context.STORAGE_SERVICE) as StorageManager
+            val volumes = try { sm.storageVolumes } catch (_: Exception) { emptyList<StorageVolume>() }
+            volumes?.forEach { vol ->
+                try {
+                    // Skip the primary internal volume because we already added it
+                    val isPrimary = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        // StorageVolume doesn't expose isPrimary() in older APIs; approximate by isEmulated
+                        vol.isEmulated
+                    } else true
+                    if (isPrimary) return@forEach
+
+                    val label = try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) vol.getDescription(this) else "Unidad externa" } catch (_: Exception) { "Unidad externa" }
+
+                    choices.add(label)
+                    actions.add {
+                        // Try to request access to the whole volume using createAccessIntent (Android N+)
+                        try {
+                            val intent = vol.createAccessIntent(null)
+                            if (intent != null) {
+                                // Launch the vendor/system intent which usually opens the Documents UI preselected on this volume
+                                volumePicker.launch(intent)
+                            } else {
+                                // Fallback to generic tree picker
+                                treePicker.launch(null)
+                            }
+                        } catch (ex: Exception) {
+                            Log.w("MainActivity", "createAccessIntent failed", ex)
+                            treePicker.launch(null)
+                        }
+                    }
+                } catch (_: Exception) { }
+            }
+        }
+
+        // Option to add a storage via generic picker
+        choices.add("Añadir microSD / USB-C…")
+        actions.add { treePicker.launch(null) }
+
+        // Previously saved external roots
+        savedExternalRoots.forEach { root ->
+            choices.add("Abrir: " + (root.name ?: "Unidad externa"))
+            actions.add { savedExternalRoot = root; loadDocumentDirectory(root, currentFilter) }
+        }
+
         android.app.AlertDialog.Builder(this).setTitle("Seleccionar almacenamiento")
             .setItems(choices.toTypedArray()) { _, which ->
-                when {
-                    which == 0 -> { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
-                    which == 1 -> treePicker.launch(savedExternalRoot?.uri)
-                    else -> savedExternalRoots.getOrNull(which - 2)?.let {
-                        savedExternalRoot = it
-                        loadDocumentDirectory(it, currentFilter)
-                    }
-                }
+                actions.getOrNull(which)?.invoke()
             }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun handleTreeUri(uri: Uri) {
+        if (uri == null) return
+        try {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            try {
+                contentResolver.takePersistableUriPermission(uri, flags)
+            } catch (ex: SecurityException) {
+                // Some providers don't grant persistable permissions; continue but warn the user
+                Log.w("MainActivity", "No se pudo tomar permiso persistente", ex)
+                runOnUiThread { Toast.makeText(this, "No se pudo conservar el permiso; puede que tenga que volver a autorizarlo", Toast.LENGTH_LONG).show() }
+            }
+            val root = DocumentFile.fromTreeUri(this, uri)
+            if (root != null) {
+                // Quick check: try listing to detect whether the system granted access to the actual root
+                var canList = true
+                try {
+                    // Attempt to list to detect blocked roots; this can still be empty for a legitimately empty folder
+                    root.listFiles()
+                } catch (ex: Exception) {
+                    canList = false
+                }
+
+                if (!canList) {
+                    // Android can prevent selecting the real root of some removable volumes.
+                    // Explain and offer to pick a subfolder explicitly.
+                    AlertDialog.Builder(this)
+                        .setTitle("Acceso limitado")
+                        .setMessage("Android impidió acceder a la raíz de esa unidad. Selecciona una carpeta dentro de la tarjeta o unidad para conceder acceso a esa carpeta.")
+                        .setPositiveButton("Seleccionar carpeta") { _, _ ->
+                            // Launch a generic tree picker so the user can pick a subfolder. Passing the same uri as initial is not guaranteed to work across devices; we let the system decide.
+                            treePicker.launch(uri)
+                        }
+                        .setNegativeButton("Cancelar", null)
+                        .show()
+                    return
+                }
+
+                savedExternalRoot = root
+                if (savedExternalRoots.none { it.uri == root.uri }) savedExternalRoots.add(root)
+                val savedUris = savedExternalRoots.map { it.uri.toString() }.toSet()
+                getSharedPreferences("storage_access", MODE_PRIVATE).edit().putStringSet("external_tree_uris", savedUris).apply()
+                loadDocumentDirectory(root, currentFilter)
+            }
+        } catch (ex: Exception) {
+            Log.w("MainActivity", "handleTreeUri failed", ex)
+            runOnUiThread { Toast.makeText(this, "Android no permitió conservar el acceso a esa unidad", Toast.LENGTH_LONG).show() }
+        }
     }
 
     private fun loadDocumentDirectory(dir: DocumentFile, filter: FileType) {
@@ -183,7 +280,10 @@ class MainActivity : AppCompatActivity() {
                     FileType.APK -> (it.name ?: "").substringAfterLast('.', "").equals("apk", true)
                     FileType.DOCUMENT -> isDocument((it.name ?: "").substringAfterLast('.', "").lowercase())
                 }}.sortedWith(compareBy<DocumentFile>({ !it.isDirectory }, { (it.name ?: "").lowercase() }))
-            } catch (_: Exception) { emptyList() }
+            } catch (ex: Exception) {
+                Log.w("MainActivity", "Error listing document directory", ex)
+                emptyList()
+            }
             runOnUiThread {
                 recyclerView.adapter = DocumentAdapter(documents)
                 countLabel.text = (dir.name ?: "Unidad externa") + " • " + documents.size + " elementos"
