@@ -32,7 +32,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        recyclerView = findViewById(R.id.recyclerView)
+        recyclerView = findViewById(R.id.list)
         recyclerView.layoutManager = GridLayoutManager(this, 4)
 
         loadDirectory(currentPath, currentFilter)
