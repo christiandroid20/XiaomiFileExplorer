@@ -5,4 +5,8 @@
         <item name="android:windowBackground">#101418</item>
         <item name="colorPrimary">#FF6700</item>
     </style>
+
+    <style name="Theme.AppCompat.NoActionBar" parent="Theme.AppCompat.Light.NoActionBar">
+        <!-- Personalizaciones de color si lo deseas -->
+    </style>
 </resources>
