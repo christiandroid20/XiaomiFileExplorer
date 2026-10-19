@@ -180,22 +180,9 @@ class MainActivity : AppCompatActivity() {
                     val label = try { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) vol.getDescription(this) else "Unidad externa" } catch (_: Exception) { "Unidad externa" }
 
                     choices.add(label)
-                    actions.add {
-                        // Try to request access to the whole volume using createAccessIntent (Android N+)
-                        try {
-                            val intent = vol.createAccessIntent(null)
-                            if (intent != null) {
-                                // Launch the vendor/system intent which usually opens the Documents UI preselected on this volume
-                                volumePicker.launch(intent)
-                            } else {
-                                // Fallback to generic tree picker
-                                treePicker.launch(null)
-                            }
-                        } catch (ex: Exception) {
-                            Log.w("MainActivity", "createAccessIntent failed", ex)
-                            treePicker.launch(null)
-                        }
-                    }
+                    // Ask the user to pick the removable volume through the standard SAF UI.
+                    // StorageVolume.createAccessIntent() is inconsistent on Android TV firmware.
+                    actions.add { treePicker.launch(null) }
                 } catch (_: Exception) { }
             }
         }
