@@ -11,27 +11,29 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+
     steps:
       - name: Descargar el código
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Instalar Java 17
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
-          distribution: temurin
+          distribution: 'temurin'
           java-version: '17'
 
-      - name: Instalar Gradle
-        uses: gradle/actions/setup-gradle@v5
-        with:
-          gradle-version: '8.7'
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Dar permisos a Gradlew
+        run: chmod +x gradlew
 
       - name: Compilar APK debug
-        run: gradle assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --stacktrace
 
       - name: Subir el APK
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v4
         with:
           name: ArchivosTV-debug-apk
           path: app/build/outputs/apk/debug/*.apk
