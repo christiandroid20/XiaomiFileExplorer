@@ -18,6 +18,8 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.documentfile.provider.DocumentFile
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
@@ -30,6 +32,22 @@ class MainActivity : AppCompatActivity() {
     private lateinit var countLabel: TextView
     private var currentPath = File("/storage/emulated/0")
     private var currentFilter = FileType.ALL
+    private var currentDocumentDir: DocumentFile? = null
+    private var savedExternalRoot: DocumentFile? = null
+
+    private val treePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            try {
+                val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                contentResolver.takePersistableUriPermission(uri, flags)
+                getSharedPreferences("storage_access", MODE_PRIVATE).edit().putString("external_tree_uri", uri.toString()).apply()
+                savedExternalRoot = DocumentFile.fromTreeUri(this, uri)
+                savedExternalRoot?.let { loadDocumentDirectory(it, currentFilter) }
+            } catch (_: Exception) {
+                Toast.makeText(this, "Android no permitió conservar el acceso a esa unidad", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     enum class FileType { ALL, VIDEO, AUDIO, IMAGE, APK, DOCUMENT }
 
@@ -43,6 +61,7 @@ class MainActivity : AppCompatActivity() {
         recyclerView.layoutManager = GridLayoutManager(this, 4)
         recyclerView.setHasFixedSize(false)
 
+        restoreExternalTree()
         createNavigationButtons()
         checkStorageAccess()
     }
@@ -104,6 +123,97 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun restoreExternalTree() {
+        val value = getSharedPreferences("storage_access", MODE_PRIVATE).getString("external_tree_uri", null) ?: return
+        try {
+            val uri = Uri.parse(value)
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            savedExternalRoot = DocumentFile.fromTreeUri(this, uri)
+        } catch (_: Exception) {
+            getSharedPreferences("storage_access", MODE_PRIVATE).edit().remove("external_tree_uri").apply()
+        }
+    }
+
+    private fun showStorageChoices() {
+        val choices = mutableListOf("Memoria interna", "Elegir microSD / USB-C…")
+        if (savedExternalRoot?.canRead() == true) choices.add("Volver a la unidad externa")
+        android.app.AlertDialog.Builder(this).setTitle("Seleccionar almacenamiento")
+            .setItems(choices.toTypedArray()) { _, which ->
+                when (which) {
+                    0 -> { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+                    1 -> treePicker.launch(savedExternalRoot?.uri)
+                    else -> savedExternalRoot?.let { loadDocumentDirectory(it, currentFilter) }
+                }
+            }.setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun loadDocumentDirectory(dir: DocumentFile, filter: FileType) {
+        currentDocumentDir = dir
+        pathLabel.text = dir.name ?: "Almacenamiento externo"
+        countLabel.text = dir.uri.toString()
+        recyclerView.adapter = DocumentAdapter(emptyList())
+        Thread {
+            val documents = try {
+                dir.listFiles().filter { it.name != null }.filter { it.isDirectory || when (filter) {
+                    FileType.ALL -> true
+                    FileType.VIDEO -> isVideo(it.name ?: "")
+                    FileType.AUDIO -> isAudio(it.name ?: "")
+                    FileType.IMAGE -> isImage(it.name ?: "")
+                    FileType.APK -> (it.name ?: "").substringAfterLast('.', "").equals("apk", true)
+                    FileType.DOCUMENT -> isDocument((it.name ?: "").substringAfterLast('.', "").lowercase())
+                }}.sortedWith(compareBy<DocumentFile>({ !it.isDirectory }, { (it.name ?: "").lowercase() }))
+            } catch (_: Exception) { emptyList() }
+            runOnUiThread {
+                recyclerView.adapter = DocumentAdapter(documents)
+                countLabel.text = (dir.name ?: "Unidad externa") + " • " + documents.size + " elementos"
+                if (documents.isEmpty()) Toast.makeText(this, "Carpeta vacía o Android no permite leer su contenido", Toast.LENGTH_LONG).show()
+            }
+        }.start()
+    }
+
+    private inner class DocumentAdapter(private val documents: List<DocumentFile>) : RecyclerView.Adapter<FileHolder>() {
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): FileHolder =
+            FileHolder(layoutInflater.inflate(R.layout.item_card, parent, false))
+        override fun getItemCount() = documents.size
+        override fun onBindViewHolder(holder: FileHolder, position: Int) {
+            val doc = documents[position]
+            val name = doc.name ?: "Archivo"
+            holder.name.text = name
+            holder.sub.text = if (doc.isDirectory) "Carpeta" else readableSize(doc.length())
+            bindDocumentIcon(name, doc.isDirectory, holder.icon)
+            holder.itemView.contentDescription = name
+            holder.itemView.setOnClickListener {
+                if (doc.isDirectory) loadDocumentDirectory(doc, currentFilter) else {
+                    try {
+                        val mime = contentResolver.getType(doc.uri) ?: contentType(name.substringAfterLast('.', ""))
+                        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(doc.uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        startActivity(Intent.createChooser(intent, "Abrir con"))
+                    } catch (_: Exception) {
+                        Toast.makeText(this@MainActivity, "No hay una aplicación compatible para abrir este archivo", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+            holder.itemView.setOnLongClickListener {
+                Toast.makeText(this@MainActivity, doc.uri.toString(), Toast.LENGTH_SHORT).show()
+                true
+            }
+        }
+    }
+
+    private fun bindDocumentIcon(name: String, isDirectory: Boolean, imageView: ImageView) {
+        if (isDirectory) { imageView.setImageResource(R.drawable.ic_folder); return }
+        val extension = name.substringAfterLast('.', "").lowercase()
+        imageView.setImageResource(when (extension) {
+            "mp4", "mkv", "avi", "mov", "webm" -> R.drawable.ic_video
+            "mp3", "flac", "wav", "aac", "ogg" -> R.drawable.ic_music
+            "jpg", "jpeg", "png", "webp", "gif" -> R.drawable.ic_image
+            "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt" -> R.drawable.ic_doc
+            "apk" -> R.drawable.ic_apk
+            "zip", "rar", "7z", "tar", "gz" -> R.drawable.ic_archive
+            else -> R.drawable.ic_file
+        })
+    }
+
     private fun createNavigationButtons() {
         val bar = findViewById<LinearLayout>(R.id.bar)
         val entries = listOf(
@@ -121,7 +231,7 @@ class MainActivity : AppCompatActivity() {
                 isAllCaps = false
                 setOnClickListener {
                     currentFilter = type
-                    loadDirectory(currentPath, currentFilter)
+                    reloadCurrentDirectory()
                 }
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
                     marginStart = 3
@@ -136,14 +246,20 @@ class MainActivity : AppCompatActivity() {
             isAllCaps = false
             setOnClickListener {
                 currentFilter = FileType.ALL
-                loadDirectory(File("/storage"), currentFilter)
+                showStorageChoices()
             }
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         bar.addView(drivesButton)
     }
 
+    private fun reloadCurrentDirectory() {
+        val external = currentDocumentDir
+        if (external != null) loadDocumentDirectory(external, currentFilter) else loadDirectory(currentPath, currentFilter)
+    }
+
     private fun loadDirectory(dir: File, filter: FileType) {
+        currentDocumentDir = null
         currentPath = dir
         pathLabel.text = dir.name.ifBlank { dir.absolutePath }
         countLabel.text = dir.absolutePath
@@ -281,6 +397,13 @@ class MainActivity : AppCompatActivity() {
 
     @Deprecated("Deprecated in Android API, retained for older TV devices")
     override fun onBackPressed() {
+        val external = currentDocumentDir
+        if (external != null) {
+            val parent = external.parentFile
+            if (parent != null && parent.uri != savedExternalRoot?.uri) loadDocumentDirectory(parent, currentFilter)
+            else { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+            return
+        }
         val parent = currentPath.parentFile
         if (parent != null && currentPath.absolutePath != "/storage/emulated/0") {
             loadDirectory(parent, currentFilter)
