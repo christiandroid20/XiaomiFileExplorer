@@ -311,22 +311,74 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun thumbnailSize(imageView: ImageView): Pair<Int, Int> {
+        // RecyclerView cards are small; decode near display size to avoid large bitmaps on TV boxes.
+        return (imageView.width.takeIf { it > 0 } ?: 256) to (imageView.height.takeIf { it > 0 } ?: 160)
+    }
+
+    private fun sampleSize(width: Int, height: Int, reqWidth: Int, reqHeight: Int): Int {
+        var sample = 1
+        if (width > reqWidth || height > reqHeight) {
+            var halfWidth = width / 2
+            var halfHeight = height / 2
+            while (halfWidth / sample >= reqWidth && halfHeight / sample >= reqHeight) {
+                sample *= 2
+            }
+        }
+        return sample.coerceAtLeast(1)
+    }
+
+    private fun decodeDocumentImage(uri: Uri, imageView: ImageView): android.graphics.Bitmap? {
+        val (reqWidth, reqHeight) = thumbnailSize(imageView)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, reqWidth, reqHeight)
+            inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+        }
+        return contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, options) }
+    }
+
+    private fun decodeFileImage(file: File, imageView: ImageView): android.graphics.Bitmap? {
+        val (reqWidth, reqHeight) = thumbnailSize(imageView)
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, reqWidth, reqHeight)
+            inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
+        }
+        return BitmapFactory.decodeFile(file.absolutePath, options)
+    }
+
     private fun bindDocumentIcon(name: String, isDirectory: Boolean, imageView: ImageView, document: DocumentFile? = null) {
         imageView.setImageDrawable(null)
         if (isDirectory) { imageView.setImageResource(R.drawable.ic_folder); return }
         val extension = name.substringAfterLast('.', "").lowercase()
-        if (extension in setOf("jpg", "jpeg", "png", "webp", "gif")) {
-            try {
-                document?.uri?.let { uri -> contentResolver.openInputStream(uri)?.use { stream ->
-                    val bitmap = BitmapFactory.decodeStream(stream)
-                    if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
-                } }
-            } catch (_: Exception) { }
+        try {
+            val uri = document?.uri
+            if (uri != null && extension in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) {
+                val bitmap = decodeDocumentImage(uri, imageView)
+                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            }
+            if (uri != null && extension in setOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v")) {
+                val retriever = android.media.MediaMetadataRetriever()
+                try {
+                    retriever.setDataSource(this, uri)
+                    val frame = retriever.getFrameAtTime(1_000_000, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    if (frame != null) { imageView.setImageBitmap(frame); return }
+                } finally {
+                    retriever.release()
+                }
+            }
+        } catch (ex: Exception) {
+            Log.d("MainActivity", "No se pudo generar miniatura SAF para $name", ex)
         }
         imageView.setImageResource(when (extension) {
-            "mp4", "mkv", "avi", "mov", "webm" -> R.drawable.ic_video
-            "mp3", "flac", "wav", "aac", "ogg" -> R.drawable.ic_music
-            "jpg", "jpeg", "png", "webp", "gif" -> R.drawable.ic_image
+            "mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v" -> R.drawable.ic_video
+            "mp3", "flac", "wav", "aac", "ogg", "m4a" -> R.drawable.ic_music
+            "jpg", "jpeg", "png", "webp", "gif", "bmp" -> R.drawable.ic_image
             "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt" -> R.drawable.ic_doc
             "apk" -> R.drawable.ic_apk
             "zip", "rar", "7z", "tar", "gz" -> R.drawable.ic_archive
@@ -449,23 +501,27 @@ class MainActivity : AppCompatActivity() {
 
     private fun bindFileIcon(file: File, imageView: ImageView) {
         imageView.setImageDrawable(null)
-        if (file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif")) {
-            try {
-                val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
-            } catch (_: Exception) { }
-        }
-        if (file.isFile && file.extension.lowercase() in setOf("mp4", "mkv", "avi", "mov", "webm")) {
-            try {
-                val bitmap = ThumbnailUtils.createVideoThumbnail(file.absolutePath, android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
-                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
-            } catch (_: Exception) { }
-        }
         if (file.isDirectory) {
             imageView.setImageResource(R.drawable.ic_folder)
             return
         }
         val extension = file.extension.lowercase()
+        if (extension in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp")) {
+            try {
+                val bitmap = decodeFileImage(file, imageView)
+                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            } catch (ex: Exception) {
+                Log.d("MainActivity", "No se pudo generar miniatura para ${file.name}", ex)
+            }
+        }
+        if (extension in setOf("mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v")) {
+            try {
+                val bitmap = ThumbnailUtils.createVideoThumbnail(file.absolutePath, android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
+                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            } catch (ex: Exception) {
+                Log.d("MainActivity", "No se pudo generar miniatura de video para ${file.name}", ex)
+            }
+        }
         if (extension == "apk") {
             val icon = getApkIcon(file.absolutePath)
             if (icon != null) imageView.setImageDrawable(icon)
@@ -473,9 +529,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
         imageView.setImageResource(when (extension) {
-            "mp4", "mkv", "avi", "mov", "webm" -> R.drawable.ic_video
-            "mp3", "flac", "wav", "aac", "ogg" -> R.drawable.ic_music
-            "jpg", "jpeg", "png", "webp", "gif" -> R.drawable.ic_image
+            "mp4", "mkv", "avi", "mov", "webm", "3gp", "m4v" -> R.drawable.ic_video
+            "mp3", "flac", "wav", "aac", "ogg", "m4a" -> R.drawable.ic_music
+            "jpg", "jpeg", "png", "webp", "gif", "bmp" -> R.drawable.ic_image
             "pdf", "docx", "doc", "xlsx", "xls", "pptx", "ppt", "txt" -> R.drawable.ic_doc
             "py", "xml", "json", "html", "js", "css", "md", "cpp", "c" -> R.drawable.ic_code
             "zip", "rar", "7z", "tar", "gz" -> R.drawable.ic_archive
