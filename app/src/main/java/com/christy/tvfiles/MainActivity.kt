@@ -2,10 +2,13 @@ package com.christy.tvfiles
 
 import android.Manifest
 import android.content.Intent
+import android.content.ActivityNotFoundException
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.Settings
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -41,10 +44,62 @@ class MainActivity : AppCompatActivity() {
         recyclerView.setHasFixedSize(false)
 
         createNavigationButtons()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+        checkStorageAccess()
+    }
+
+    /**
+     * Android 11+ treats access to all files as a special app setting.
+     * Android does not allow an app to silently grant this access during install;
+     * the user must confirm it in system settings.
+     */
+    private fun checkStorageAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            if (Environment.isExternalStorageManager()) {
+                loadDirectory(currentPath, currentFilter)
+            } else {
+                Toast.makeText(
+                    this,
+                    "Activa \"Permitir administrar todos los archivos\" para usar el explorador",
+                    Toast.LENGTH_LONG
+                ).show()
+                try {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:$packageName")
+                    )
+                    startActivity(intent)
+                } catch (_: ActivityNotFoundException) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                    } catch (_: Exception) {
+                        Toast.makeText(
+                            this,
+                            "Abre Ajustes > Aplicaciones > XiaomiFileExplorer > Acceso a todos los archivos",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                } catch (_: Exception) {
+                    Toast.makeText(
+                        this,
+                        "Concede el acceso a todos los archivos desde los ajustes de la aplicación",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE), 100)
+            requestPermissions(
+                arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE),
+                100
+            )
         } else {
+            loadDirectory(currentPath, currentFilter)
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
             loadDirectory(currentPath, currentFilter)
         }
     }
