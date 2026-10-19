@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
+import android.graphics.BitmapFactory
+import android.media.ThumbnailUtils
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
@@ -73,7 +75,8 @@ class MainActivity : AppCompatActivity() {
 
         restoreExternalTree()
         createNavigationButtons()
-        checkStorageAccess()
+        // Present the storage chooser on launch; don't silently open internal storage.
+        recyclerView.post { showStorageChoices() }
     }
 
     /**
@@ -288,7 +291,7 @@ class MainActivity : AppCompatActivity() {
             val name = doc.name ?: "Archivo"
             holder.name.text = name
             holder.sub.text = if (doc.isDirectory) "Carpeta" else readableSize(doc.length())
-            bindDocumentIcon(name, doc.isDirectory, holder.icon)
+            bindDocumentIcon(name, doc.isDirectory, holder.icon, doc)
             holder.itemView.contentDescription = name
             holder.itemView.setOnClickListener {
                 if (doc.isDirectory) loadDocumentDirectory(doc, currentFilter) else {
@@ -308,9 +311,18 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun bindDocumentIcon(name: String, isDirectory: Boolean, imageView: ImageView) {
+    private fun bindDocumentIcon(name: String, isDirectory: Boolean, imageView: ImageView, document: DocumentFile? = null) {
+        imageView.setImageDrawable(null)
         if (isDirectory) { imageView.setImageResource(R.drawable.ic_folder); return }
         val extension = name.substringAfterLast('.', "").lowercase()
+        if (extension in setOf("jpg", "jpeg", "png", "webp", "gif")) {
+            try {
+                document?.uri?.let { uri -> contentResolver.openInputStream(uri)?.use { stream ->
+                    val bitmap = BitmapFactory.decodeStream(stream)
+                    if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+                } }
+            } catch (_: Exception) { }
+        }
         imageView.setImageResource(when (extension) {
             "mp4", "mkv", "avi", "mov", "webm" -> R.drawable.ic_video
             "mp3", "flac", "wav", "aac", "ogg" -> R.drawable.ic_music
@@ -436,6 +448,19 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun bindFileIcon(file: File, imageView: ImageView) {
+        imageView.setImageDrawable(null)
+        if (file.isFile && file.extension.lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif")) {
+            try {
+                val bitmap = BitmapFactory.decodeFile(file.absolutePath)
+                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            } catch (_: Exception) { }
+        }
+        if (file.isFile && file.extension.lowercase() in setOf("mp4", "mkv", "avi", "mov", "webm")) {
+            try {
+                val bitmap = ThumbnailUtils.createVideoThumbnail(file.absolutePath, android.provider.MediaStore.Video.Thumbnails.MINI_KIND)
+                if (bitmap != null) { imageView.setImageBitmap(bitmap); return }
+            } catch (_: Exception) { }
+        }
         if (file.isDirectory) {
             imageView.setImageResource(R.drawable.ic_folder)
             return
