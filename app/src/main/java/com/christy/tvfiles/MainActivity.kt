@@ -34,15 +34,21 @@ class MainActivity : AppCompatActivity() {
     private var currentFilter = FileType.ALL
     private var currentDocumentDir: DocumentFile? = null
     private var savedExternalRoot: DocumentFile? = null
+    private val savedExternalRoots = mutableListOf<DocumentFile>()
 
     private val treePicker = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             try {
                 val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 contentResolver.takePersistableUriPermission(uri, flags)
-                getSharedPreferences("storage_access", MODE_PRIVATE).edit().putString("external_tree_uri", uri.toString()).apply()
-                savedExternalRoot = DocumentFile.fromTreeUri(this, uri)
-                savedExternalRoot?.let { loadDocumentDirectory(it, currentFilter) }
+                val root = DocumentFile.fromTreeUri(this, uri)
+                if (root != null) {
+                    savedExternalRoot = root
+                    if (savedExternalRoots.none { it.uri == root.uri }) savedExternalRoots.add(root)
+                    val savedUris = savedExternalRoots.map { it.uri.toString() }.toSet()
+                    getSharedPreferences("storage_access", MODE_PRIVATE).edit().putStringSet("external_tree_uris", savedUris).apply()
+                    loadDocumentDirectory(root, currentFilter)
+                }
             } catch (_: Exception) {
                 Toast.makeText(this, "Android no permitió conservar el acceso a esa unidad", Toast.LENGTH_LONG).show()
             }
@@ -124,25 +130,40 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restoreExternalTree() {
-        val value = getSharedPreferences("storage_access", MODE_PRIVATE).getString("external_tree_uri", null) ?: return
-        try {
-            val uri = Uri.parse(value)
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            savedExternalRoot = DocumentFile.fromTreeUri(this, uri)
-        } catch (_: Exception) {
-            getSharedPreferences("storage_access", MODE_PRIVATE).edit().remove("external_tree_uri").apply()
+        val prefs = getSharedPreferences("storage_access", MODE_PRIVATE)
+        val values = prefs.getStringSet("external_tree_uris", emptySet()).orEmpty()
+        values.forEach { value ->
+            try {
+                val uri = Uri.parse(value)
+                contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                DocumentFile.fromTreeUri(this, uri)?.let { savedExternalRoots.add(it) }
+            } catch (_: Exception) { }
         }
+        if (savedExternalRoots.isEmpty()) {
+            val legacy = prefs.getString("external_tree_uri", null)
+            if (legacy != null) try {
+                val uri = Uri.parse(legacy)
+                DocumentFile.fromTreeUri(this, uri)?.let {
+                    savedExternalRoots.add(it)
+                    prefs.edit().putStringSet("external_tree_uris", setOf(legacy)).apply()
+                }
+            } catch (_: Exception) { }
+        }
+        savedExternalRoot = savedExternalRoots.lastOrNull()
     }
 
     private fun showStorageChoices() {
-        val choices = mutableListOf("Memoria interna", "Elegir microSD / USB-C…")
-        if (savedExternalRoot?.canRead() == true) choices.add("Volver a la unidad externa")
+        val choices = mutableListOf("Memoria interna", "Añadir microSD / USB-C…")
+        savedExternalRoots.forEach { root -> choices.add("Abrir: " + (root.name ?: "Unidad externa")) }
         android.app.AlertDialog.Builder(this).setTitle("Seleccionar almacenamiento")
             .setItems(choices.toTypedArray()) { _, which ->
-                when (which) {
-                    0 -> { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
-                    1 -> treePicker.launch(savedExternalRoot?.uri)
-                    else -> savedExternalRoot?.let { loadDocumentDirectory(it, currentFilter) }
+                when {
+                    which == 0 -> { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
+                    which == 1 -> treePicker.launch(savedExternalRoot?.uri)
+                    else -> savedExternalRoots.getOrNull(which - 2)?.let {
+                        savedExternalRoot = it
+                        loadDocumentDirectory(it, currentFilter)
+                    }
                 }
             }.setNegativeButton("Cancelar", null).show()
     }
@@ -400,7 +421,7 @@ class MainActivity : AppCompatActivity() {
         val external = currentDocumentDir
         if (external != null) {
             val parent = external.parentFile
-            if (parent != null && parent.uri != savedExternalRoot?.uri) loadDocumentDirectory(parent, currentFilter)
+            if (parent != null) loadDocumentDirectory(parent, currentFilter)
             else { currentDocumentDir = null; loadDirectory(File("/storage/emulated/0"), currentFilter) }
             return
         }
