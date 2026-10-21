@@ -23,8 +23,10 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Configurar Gradle
+      - name: Configurar Gradle 8.7 (compatible con Android Gradle Plugin 8.5.2)
         uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
 
       - name: Compilar APK debug
         run: gradle assembleDebug --stacktrace
