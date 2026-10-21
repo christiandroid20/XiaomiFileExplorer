@@ -2,25 +2,28 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@drawable/card_focus_selector"
     android:clickable="true"
     android:focusable="true"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="8dp">
 
     <FrameLayout
         android:id="@+id/thumb"
         android:layout_width="match_parent"
-        android:layout_height="140dp"
-        android:foregroundGravity="center">
+        android:layout_height="96dp">
+
+        <ImageView
+            android:id="@+id/thumbImg"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:scaleType="centerCrop"
+            android:visibility="gone" />
 
         <ImageView
             android:id="@+id/icon"
-            android:layout_width="80dp"
-            android:layout_height="80dp"
-            android:layout_gravity="center"
-            android:contentDescription="thumbnail"
-            android:scaleType="centerCrop" />
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:layout_gravity="center" />
     </FrameLayout>
 
     <TextView
@@ -31,7 +34,7 @@
         android:ellipsize="middle"
         android:singleLine="true"
         android:textColor="#FFFFFF"
-        android:textSize="16sp" />
+        android:textSize="15sp" />
 
     <TextView
         android:id="@+id/sub"
