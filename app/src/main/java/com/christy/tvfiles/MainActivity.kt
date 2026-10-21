@@ -468,15 +468,30 @@ class MainActivity : Activity() {
     }
 
     private fun open(f: File) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
-        val i = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         try {
-            startActivity(i)
+            // Debe coincidir exactamente con la autoridad declarada en AndroidManifest.xml.
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            val mime = MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(f.extension.lowercase())
+                ?: when (typeOf(f)) {
+                    T_PHOTO -> "image/*"
+                    T_AUDIO -> "audio/*"
+                    T_VIDEO -> "video/*"
+                    else -> "*/*"
+                }
+
+            // Android abrirá directamente si solo existe una app compatible;
+            // si hay varias, mostrará el selector del sistema.
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(intent)
+        } catch (ex: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, "No hay una aplicación compatible para abrir este contenido", Toast.LENGTH_LONG).show()
         } catch (ex: Exception) {
-            Toast.makeText(this, "No hay una app para abrir este archivo", Toast.LENGTH_LONG).show()
+            android.util.Log.e("XiaomiFileExplorer", "No se pudo abrir: ${f.path}", ex)
+            Toast.makeText(this, "No se pudo abrir este archivo", Toast.LENGTH_LONG).show()
         }
     }
 }
