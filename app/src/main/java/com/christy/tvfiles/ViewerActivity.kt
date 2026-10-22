@@ -2,6 +2,11 @@ package com.christy.tvfiles
 
 import android.graphics.BitmapFactory
 import android.graphics.Color
+import android.content.Intent
+import android.webkit.MimeTypeMap
+import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
+import androidx.core.content.FileProvider
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
@@ -29,6 +34,7 @@ class ViewerActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
     private var statusView: TextView? = null
+    private var fallbackShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -165,8 +171,9 @@ class ViewerActivity : AppCompatActivity() {
 
             exo.addListener(object : Player.Listener {
                 override fun onPlayerError(error: PlaybackException) {
-                    status.text = "No se pudo reproducir este formato o códec. Usa Atrás para volver."
+                    status.text = "Este formato o códec no se pudo reproducir."
                     status.visibility = View.VISIBLE
+                    offerExternalPlayer(file, "No se pudo reproducir con el visor integrado. ¿Quieres elegir otra aplicación?")
                 }
             })
 
@@ -180,8 +187,53 @@ class ViewerActivity : AppCompatActivity() {
             exo.playWhenReady = true
             playerSurface.requestFocus()
         } catch (t: Throwable) {
-            status.text = "No se pudo iniciar el reproductor. Usa Atrás para volver."
+            status.text = "No se pudo iniciar el reproductor."
             status.visibility = View.VISIBLE
+            offerExternalPlayer(file, "No se pudo iniciar el visor integrado. ¿Quieres elegir otra aplicación?")
+        }
+    }
+
+    private fun offerExternalPlayer(file: File, message: String) {
+        if (isFinishing || fallbackShown) return
+        fallbackShown = true
+        runOnUiThread {
+            if (isFinishing) return@runOnUiThread
+            AlertDialog.Builder(this)
+                .setTitle("Abrir con otra aplicación")
+                .setMessage(message)
+                .setNegativeButton("Volver") { dialog, _ ->
+                    dialog.dismiss()
+                    fallbackShown = false
+                }
+                .setPositiveButton("Elegir aplicación") { dialog, _ ->
+                    dialog.dismiss()
+                    openExternal(file)
+                }
+                .setOnCancelListener { fallbackShown = false }
+                .show()
+        }
+    }
+
+    private fun openExternal(file: File) {
+        try {
+            player?.pause()
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val mime = MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(file.extension.lowercase())
+                ?: when (typeFromExtension(file.extension.lowercase())) {
+                    "image" -> "image/*"
+                    "audio" -> "audio/*"
+                    "video" -> "video/*"
+                    else -> "*/*"
+                }
+            val intent = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, mime)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(Intent.createChooser(intent, "Abrir con"))
+            finish()
+        } catch (t: Throwable) {
+            Toast.makeText(this, "No hay otra aplicación compatible instalada", Toast.LENGTH_LONG).show()
+            fallbackShown = false
         }
     }
 
