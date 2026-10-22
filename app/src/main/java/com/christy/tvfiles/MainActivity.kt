@@ -468,15 +468,37 @@ class MainActivity : Activity() {
     }
 
     private fun open(f: File) {
-        val uri = FileProvider.getUriForFile(this, "$packageName.files", f)
-        val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(f.extension.lowercase()) ?: "*/*"
-        val i = Intent(Intent.ACTION_VIEW)
-            .setDataAndType(uri, mime)
-            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val ext = f.extension.lowercase()
+        val viewerType = when {
+            ext in img -> "image"
+            ext in aud -> "audio"
+            ext in vid -> "video"
+            else -> null
+        }
+
+        // Los formatos multimedia se abren dentro de la app, sin depender de que
+        // el TV Box tenga otra galería o reproductor instalado.
+        if (viewerType != null) {
+            try {
+                startActivity(Intent(this, ViewerActivity::class.java)
+                    .putExtra("filePath", f.absolutePath)
+                    .putExtra("fileType", viewerType))
+            } catch (ex: Exception) {
+                Toast.makeText(this, "No se pudo abrir este archivo", Toast.LENGTH_LONG).show()
+            }
+            return
+        }
+
+        // Para documentos desconocidos, abrir con una app externa si existe.
         try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "*/*"
+            val i = Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, mime)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             startActivity(i)
         } catch (ex: Exception) {
-            Toast.makeText(this, "No hay una app para abrir este archivo", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "No hay una app compatible para abrir este archivo", Toast.LENGTH_LONG).show()
         }
     }
 }
