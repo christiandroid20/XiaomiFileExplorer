@@ -30,4 +30,6 @@ dependencies {
     implementation 'androidx.documentfile:documentfile:1.0.1'
 	implementation 'org.apache.ftpserver:ftpserver-core:1.2.0'
     implementation 'org.slf4j:slf4j-android:1.7.36'
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.media3:media3-ui:1.4.1'
 }

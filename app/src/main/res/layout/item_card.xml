@@ -10,13 +10,19 @@
     <FrameLayout
         android:id="@+id/thumb"
         android:layout_width="match_parent"
-        android:layout_height="96dp">
+        android:layout_height="104dp">
 
         <ImageView
             android:id="@+id/thumbImg"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
             android:scaleType="centerCrop"
+            android:visibility="gone" />
+
+        <VideoView
+            android:id="@+id/videoPreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
             android:visibility="gone" />
 
         <ImageView
