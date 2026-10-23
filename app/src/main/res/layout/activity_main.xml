@@ -63,8 +63,13 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="bottom"
-            android:orientation="horizontal">
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:minHeight="64dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:background="#0F1115"
+            android:elevation="8dp">
 
             <TextView
                 android:id="@+id/t1"
@@ -72,7 +77,9 @@
                 android:layout_height="wrap_content"
                 android:fontFamily="sans-serif-medium"
                 android:textColor="#FFFFFF"
-                android:textSize="26sp" />
+                android:maxLines="1"
+                android:ellipsize="end"
+                android:textSize="24sp" />
 
             <TextView
                 android:id="@+id/t2"
@@ -80,7 +87,8 @@
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="12dp"
                 android:layout_weight="1"
-                android:ellipsize="start"
+                android:ellipsize="middle"
+                android:maxLines="1"
                 android:singleLine="true"
                 android:textColor="#8D95A5"
                 android:textSize="16sp" />
@@ -94,7 +102,7 @@
             android:clipChildren="false"
             android:clipToPadding="false"
             android:paddingBottom="16dp"
-            android:paddingTop="16dp" />
+            android:paddingTop="12dp" />
     </LinearLayout>
 
     <LinearLayout
