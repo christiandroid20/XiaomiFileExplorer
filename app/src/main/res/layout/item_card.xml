@@ -19,6 +19,12 @@
             android:scaleType="centerCrop"
             android:visibility="gone" />
 
+        <VideoView
+            android:id="@+id/videoPreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
         <ImageView
             android:id="@+id/icon"
             android:layout_width="40dp"
