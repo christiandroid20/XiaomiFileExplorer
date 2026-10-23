@@ -19,6 +19,8 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
+import android.os.Looper
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
 import android.text.format.Formatter
@@ -30,6 +32,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.VideoView
+import android.media.MediaPlayer
 import androidx.core.content.FileProvider
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -46,6 +50,7 @@ class Cat(val mode: Mode, val label: String, val icon: Int, val color: Int)
 class CardVH(v: View) : RecyclerView.ViewHolder(v) {
     val thumb: FrameLayout = v.findViewById(R.id.thumb)
     val thumbImg: ImageView = v.findViewById(R.id.thumbImg)
+    val videoPreview: VideoView = v.findViewById(R.id.videoPreview)
     val icon: ImageView = v.findViewById(R.id.icon)
     val name: TextView = v.findViewById(R.id.name)
     val sub: TextView = v.findViewById(R.id.sub)
@@ -93,6 +98,8 @@ class MainActivity : Activity() {
     private val tiles = LinkedHashMap<Mode, View>()
     private val adapter = CardAdapter()
     private val pool = Executors.newFixedThreadPool(3)
+    private val previewHandler = Handler(Looper.getMainLooper())
+    private val previewTimeouts = java.util.WeakHashMap<VideoView, Runnable>()
     private val cache = object : LruCache<String, Bitmap>(32 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
@@ -117,6 +124,7 @@ class MainActivity : Activity() {
 
         override fun onBindViewHolder(h: CardVH, position: Int) {
             val e = items[position]
+            stopVideoPreview(h)
             h.name.text = e.name
             h.sub.text = e.sub
             h.icon.setImageResource(icons[e.type])
@@ -133,7 +141,14 @@ class MainActivity : Activity() {
             h.thumb.clipToOutline = true
             loadThumb(h, e)
             h.itemView.setOnClickListener { onItem(e) }
-            h.itemView.setOnFocusChangeListener { v, f -> fx(v, ring, f, 1.06f) }
+            h.itemView.setOnFocusChangeListener { v, focused ->
+                fx(v, ring, focused, 1.06f)
+                if (focused && e.type == T_VIDEO && e.file != null) {
+                    startVideoPreview(h, e)
+                } else {
+                    stopVideoPreview(h)
+                }
+            }
         }
     }
 
@@ -399,6 +414,63 @@ class MainActivity : Activity() {
                 runOnUiThread { if (h.itemView.tag === e) showThumb(h, b, ext == "apk", true) }
             }
         }
+    }
+
+    private fun startVideoPreview(h: CardVH, e: Entry) {
+        val file = e.file ?: return
+        if (!file.isFile || !file.canRead()) return
+        val video = h.videoPreview
+        stopVideoPreview(h)
+        video.visibility = View.VISIBLE
+        h.thumbImg.visibility = View.GONE
+        h.icon.visibility = View.GONE
+        video.setOnPreparedListener { mp ->
+            try {
+                mp.isLooping = false
+                mp.setVolume(0f, 0f)
+                video.seekTo(3000)
+                video.start()
+                val timeout = Runnable {
+                    try { video.stopPlayback() } catch (_: Throwable) { }
+                    video.visibility = View.GONE
+                    if (h.itemView.hasFocus()) {
+                        h.thumbImg.visibility = if (h.thumbImg.drawable != null) View.VISIBLE else View.GONE
+                        h.icon.visibility = if (h.thumbImg.drawable != null) View.GONE else View.VISIBLE
+                    }
+                    previewTimeouts.remove(video)
+                }
+                previewTimeouts[video] = timeout
+                // Reproducir solo 20 segundos y únicamente en la tarjeta enfocada.
+                previewHandler.postDelayed(timeout, 20_000L)
+            } catch (_: Throwable) {
+                stopVideoPreview(h)
+            }
+        }
+        video.setOnErrorListener { _, _, _ ->
+            video.visibility = View.GONE
+            h.thumbImg.visibility = View.VISIBLE
+            h.icon.visibility = View.GONE
+            true
+        }
+        video.setOnCompletionListener {
+            stopVideoPreview(h)
+            if (h.itemView.hasFocus()) {
+                h.thumbImg.visibility = if (h.thumbImg.drawable != null) View.VISIBLE else View.GONE
+                h.icon.visibility = if (h.thumbImg.drawable != null) View.GONE else View.VISIBLE
+            }
+        }
+        try {
+            video.setVideoPath(file.absolutePath)
+        } catch (_: Throwable) {
+            video.visibility = View.GONE
+        }
+    }
+
+    private fun stopVideoPreview(h: CardVH) {
+        val video = h.videoPreview
+        previewTimeouts.remove(video)?.let { previewHandler.removeCallbacks(it) }
+        try { video.stopPlayback() } catch (_: Throwable) { }
+        video.visibility = View.GONE
     }
 
     private fun showThumb(h: CardVH, b: Bitmap, apk: Boolean, fade: Boolean) {
