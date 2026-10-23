@@ -10,6 +10,8 @@ import androidx.core.content.FileProvider
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
+import android.graphics.drawable.GradientDrawable
+import android.view.ViewGroup
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -138,18 +140,42 @@ class ViewerActivity : AppCompatActivity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
 
-        val root = baseLayout(file.name)
+        val isVideo = type == "video"
+        if (isVideo) {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY or
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            )
+        }
+
+        val root: View = if (isVideo) FrameLayout(this).apply {
+            setBackgroundColor(Color.BLACK)
+            isFocusableInTouchMode = true
+        } else baseLayout(file.name)
+
         val playerSurface = PlayerView(this).apply {
             useController = true
             controllerAutoShow = true
             setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
             isFocusable = true
             isFocusableInTouchMode = true
+            setBackgroundColor(Color.BLACK)
         }
         playerView = playerSurface
-        root.addView(playerSurface, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
-        ))
+        if (isVideo) {
+            (root as FrameLayout).addView(playerSurface, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+        } else {
+            (root as LinearLayout).addView(playerSurface, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f
+            ))
+        }
 
         val status = TextView(this).apply {
             setTextColor(Color.rgb(255, 190, 110))
@@ -159,10 +185,18 @@ class ViewerActivity : AppCompatActivity() {
             setPadding(dp(16), dp(8), dp(16), dp(12))
         }
         statusView = status
-        root.addView(status, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ))
+        if (isVideo) {
+            (root as FrameLayout).addView(status, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM
+            ))
+        } else {
+            (root as LinearLayout).addView(status, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
         setContentView(root)
+        installFocusHighlight(playerSurface)
 
         try {
             val exo = ExoPlayer.Builder(this).build()
@@ -177,10 +211,10 @@ class ViewerActivity : AppCompatActivity() {
                 }
             })
 
-            val metadata = MediaMetadata.Builder().setTitle(file.name).build()
+            // No incrustar el nombre como título del controlador: en video
+            // queremos que los controles se oculten y quede solo la imagen.
             val item = MediaItem.Builder()
                 .setUri(Uri.fromFile(file))
-                .setMediaMetadata(metadata)
                 .build()
             exo.setMediaItem(item)
             exo.prepare()
@@ -190,6 +224,32 @@ class ViewerActivity : AppCompatActivity() {
             status.text = "No se pudo iniciar el reproductor."
             status.visibility = View.VISIBLE
             offerExternalPlayer(file, "No se pudo iniciar el visor integrado. ¿Quieres elegir otra aplicación?")
+        }
+    }
+
+    private fun installFocusHighlight(view: View) {
+        val focusables = ArrayList<View>()
+        fun collect(v: View) {
+            if (v.isFocusable) focusables.add(v)
+            if (v is ViewGroup) {
+                for (i in 0 until v.childCount) collect(v.getChildAt(i))
+            }
+        }
+        collect(view)
+        focusables.forEach { control ->
+            control.setOnFocusChangeListener { v, focused ->
+                v.animate().scaleX(if (focused) 1.10f else 1f)
+                    .scaleY(if (focused) 1.10f else 1f).setDuration(100).start()
+                if (focused) {
+                    v.background = GradientDrawable().apply {
+                        setColor(Color.rgb(54, 78, 112))
+                        setStroke(dp(2), Color.WHITE)
+                        cornerRadius = dp(8).toFloat()
+                    }
+                } else {
+                    v.background = null
+                }
+            }
         }
     }
 
