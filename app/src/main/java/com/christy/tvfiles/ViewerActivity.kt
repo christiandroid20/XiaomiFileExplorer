@@ -13,6 +13,7 @@ import android.view.Gravity
 import android.graphics.drawable.GradientDrawable
 import android.view.ViewGroup
 import android.view.View
+import android.view.KeyEvent
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -36,6 +37,7 @@ class ViewerActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
     private var playerView: PlayerView? = null
     private var statusView: TextView? = null
+    private var videoTitleView: TextView? = null
     private var fallbackShown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -167,9 +169,24 @@ class ViewerActivity : AppCompatActivity() {
             setBackgroundColor(Color.BLACK)
         }
         playerView = playerSurface
+        val videoTitle = if (isVideo) TextView(this).apply {
+            text = file.name
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(24), dp(10), dp(24), dp(10))
+            setBackgroundColor(Color.rgb(18, 20, 26))
+            elevation = dp(8).toFloat()
+        } else null
+        videoTitleView = videoTitle
         if (isVideo) {
             (root as FrameLayout).addView(playerSurface, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+            (root as FrameLayout).addView(videoTitle, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, dp(52), Gravity.TOP
             ))
         } else {
             (root as LinearLayout).addView(playerSurface, LinearLayout.LayoutParams(
@@ -197,6 +214,13 @@ class ViewerActivity : AppCompatActivity() {
         }
         setContentView(root)
         installFocusHighlight(playerSurface)
+        if (isVideo) {
+            playerSurface.setControllerVisibilityListener(
+                PlayerView.ControllerVisibilityListener { visibility ->
+                    videoTitleView?.visibility = visibility
+                }
+            )
+        }
 
         try {
             val exo = ExoPlayer.Builder(this).build()
@@ -211,8 +235,6 @@ class ViewerActivity : AppCompatActivity() {
                 }
             })
 
-            // No incrustar el nombre como título del controlador: en video
-            // queremos que los controles se oculten y quede solo la imagen.
             val item = MediaItem.Builder()
                 .setUri(Uri.fromFile(file))
                 .build()
@@ -225,6 +247,24 @@ class ViewerActivity : AppCompatActivity() {
             status.visibility = View.VISIBLE
             offerExternalPlayer(file, "No se pudo iniciar el visor integrado. ¿Quieres elegir otra aplicación?")
         }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        val surface = playerView
+        if (event.action == KeyEvent.ACTION_DOWN && surface != null &&
+            intent.getStringExtra("fileType") == "video" && !surface.isControllerFullyVisible) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+                KeyEvent.KEYCODE_NUMPAD_ENTER, KeyEvent.KEYCODE_DPAD_UP,
+                KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT,
+                KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+                KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                    surface.showController()
+                    return true
+                }
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun installFocusHighlight(view: View) {
